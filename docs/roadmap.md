@@ -12,7 +12,8 @@ Status: **done.**
 - `core/transport` — WebSocket client to relay, signed `/link` auth
 - `core/store` — SQLite persistence (identity, peers, threads, envelopes,
   outbox)
-- `core/policy` — minimal allowlist / revoke gate
+- `core/policy` — allowlist / revoke gate plus quiet-hours downgrade
+  (AskHuman → NotifyHuman inside a configured nightly window)
 - `core/surface` — HumanSurface / AgentSurface contracts + Nop defaults
 - `core/node` — wired entrypoint with pair / consume / open / send /
   subscribe / submit_human_reply (inbox is cursor-based, not poll-based)

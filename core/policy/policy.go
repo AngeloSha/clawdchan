@@ -4,6 +4,8 @@
 package policy
 
 import (
+	"time"
+
 	"github.com/agents-first/clawdchan/core/envelope"
 	"github.com/agents-first/clawdchan/core/identity"
 	"github.com/agents-first/clawdchan/core/pairing"
@@ -29,6 +31,37 @@ type Config struct {
 	// DefaultAskBehavior is applied when a peer is not in AskHumanAllowlist.
 	// Zero value defaults to Downgrade.
 	DefaultAskBehavior Decision
+	// QuietHours, when non-nil, downgrades an otherwise-allowed AskHuman to
+	// NotifyHuman during the configured nightly window so a remote peer can't
+	// interrupt the human while they're asleep. It only ever softens an
+	// Allow — it never loosens a Deny or Downgrade into a wake-up.
+	QuietHours *QuietHours
+	// Now returns the wall-clock time used to evaluate QuietHours. nil uses
+	// time.Now; tests pin it to a fixed instant.
+	Now func() time.Time
+}
+
+// QuietHours is a daily local-time window during which AskHuman intents are
+// downgraded to NotifyHuman. StartHour and EndHour are hours in [0,24) in the
+// local timezone and define the half-open window [StartHour, EndHour). When
+// StartHour > EndHour the window wraps past midnight (e.g. {22, 7} covers
+// 22:00–06:59). StartHour == EndHour is an empty window (quiet hours off).
+type QuietHours struct {
+	StartHour int
+	EndHour   int
+}
+
+// Contains reports whether t's hour falls inside the quiet window.
+func (q QuietHours) Contains(t time.Time) bool {
+	if q.StartHour == q.EndHour {
+		return false
+	}
+	h := t.Hour()
+	if q.StartHour < q.EndHour {
+		return h >= q.StartHour && h < q.EndHour
+	}
+	// Wraps past midnight.
+	return h >= q.StartHour || h < q.EndHour
 }
 
 // Engine evaluates Decisions for incoming envelopes.
@@ -50,16 +83,41 @@ func (e *engine) Evaluate(env envelope.Envelope, peer pairing.Peer) Decision {
 		return Deny
 	}
 	if env.Intent == envelope.IntentAskHuman {
-		if e.cfg.AskHumanAllowlist != nil {
-			if e.cfg.AskHumanAllowlist[peer.NodeID] {
-				return Allow
-			}
-			if e.cfg.DefaultAskBehavior != 0 {
-				return e.cfg.DefaultAskBehavior
-			}
+		base := e.askHumanBase(peer)
+		// Quiet hours only soften an otherwise-allowed wake-up; they never
+		// upgrade a Deny or Downgrade into one.
+		if base == Allow && e.inQuietHours() {
 			return Downgrade
 		}
-		return Allow
+		return base
 	}
 	return Allow
+}
+
+// askHumanBase resolves the allowlist decision for an AskHuman, ignoring
+// quiet hours.
+func (e *engine) askHumanBase(peer pairing.Peer) Decision {
+	if e.cfg.AskHumanAllowlist == nil {
+		return Allow
+	}
+	if e.cfg.AskHumanAllowlist[peer.NodeID] {
+		return Allow
+	}
+	if e.cfg.DefaultAskBehavior != 0 {
+		return e.cfg.DefaultAskBehavior
+	}
+	return Downgrade
+}
+
+// inQuietHours reports whether the current time falls in the configured
+// quiet window.
+func (e *engine) inQuietHours() bool {
+	if e.cfg.QuietHours == nil {
+		return false
+	}
+	now := time.Now
+	if e.cfg.Now != nil {
+		now = e.cfg.Now
+	}
+	return e.cfg.QuietHours.Contains(now())
 }
